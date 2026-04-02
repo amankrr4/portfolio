@@ -581,7 +581,7 @@ img {
     gap: 1.35rem;
 }
 
-.hero-copy > * {
+.hero-copy>* {
     position: relative;
     z-index: 1;
 }
@@ -785,8 +785,7 @@ img {
     height: auto;
     display: block;
     filter:
-        drop-shadow(0 10px 24px rgba(7, 18, 34, 0.32))
-        drop-shadow(0 0 26px rgba(84, 193, 255, 0.18));
+        drop-shadow(0 10px 24px rgba(7, 18, 34, 0.32)) drop-shadow(0 0 26px rgba(84, 193, 255, 0.18));
 }
 
 .hand-shadow {
@@ -1493,6 +1492,7 @@ html.scroll-reveal-enabled [data-reveal="up-soft"] {
 }
 
 @keyframes blink {
+
     0%,
     48%,
     100% {
@@ -1506,6 +1506,7 @@ html.scroll-reveal-enabled [data-reveal="up-soft"] {
 }
 
 @keyframes float {
+
     0%,
     100% {
         transform: translateY(0);
@@ -1517,6 +1518,7 @@ html.scroll-reveal-enabled [data-reveal="up-soft"] {
 }
 
 @keyframes drift {
+
     0%,
     100% {
         transform: translate3d(0, calc(var(--scroll-shift) * 0.08), 0) scale(1);
@@ -1548,6 +1550,7 @@ html.scroll-reveal-enabled [data-reveal="up-soft"] {
 }
 
 @keyframes beamPulse {
+
     0%,
     100% {
         opacity: 0.08;
@@ -1571,6 +1574,7 @@ html.scroll-reveal-enabled [data-reveal="up-soft"] {
 }
 
 @keyframes sweep {
+
     0%,
     100% {
         opacity: 0.08;
@@ -1620,6 +1624,7 @@ html.scroll-reveal-enabled [data-reveal="up-soft"] {
 }
 
 @media (max-width: 860px) {
+
     .ambient-ring,
     .ambient-beam {
         display: none;
