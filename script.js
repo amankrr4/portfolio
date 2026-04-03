@@ -1,3 +1,8 @@
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
 const firebaseConfig = {
     apiKey: "AIzaSyBeqBg3LaVkuKztXmfRNAWT_g6BSqL2TcU",
     authDomain: "webpage1-0-1.firebaseapp.com",
@@ -686,158 +691,534 @@ function initHeroParallax() {
     });
 }
 
-function initHandSystem() {
-    const system = document.getElementById("hero-hand");
-    const nodes = Array.from(system?.querySelectorAll(".orbit-node") || []);
+function initJarvisSphere() {
+    const container = document.getElementById("hero-visual");
 
-    if (!system || !nodes.length) {
+    if (!container || prefersReducedMotion) {
         return;
     }
 
-    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-    const randomInRange = (min, max) => min + Math.random() * (max - min);
+    // Three.js Setup
+    const scene = new THREE.Scene();
 
-    const items = nodes.map((node, index) => {
-        const baseRadius = Number(node.getAttribute("data-radius") || "72");
+    // Camera
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.z = 10;
 
-        return {
-            node,
-            angle: Number(node.getAttribute("data-angle") || String(index)),
-            baseRadius,
-            scaledBaseRadius: baseRadius,
-            radius: baseRadius,
-            targetRadius: baseRadius,
-            speed: Number(node.getAttribute("data-speed") || "0.7"),
-            verticalRatio: Number(node.getAttribute("data-ellipse") || "0.72"),
-            scale: 1,
-            targetScale: 1,
-            opacity: 1,
-            targetOpacity: 1,
-            bobSeed: randomInRange(0, Math.PI * 2),
-            bobSpeed: randomInRange(1.4, 2.4),
-            radiusOffset: randomInRange(-6, 6)
-        };
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ 
+        alpha: true, 
+        antialias: true, 
+        powerPreference: "high-performance",
+        premultipliedAlpha: false // Fixes transparency issues in many compositions
+    });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x000000, 0); // Transparent base
+    renderer.setClearAlpha(0);
+    renderer.autoClear = false; // Manual clear for composer alpha
+    renderer.domElement.style.background = 'none';
+    container.insertBefore(renderer.domElement, container.firstChild);
+
+    // Post-processing Bloom
+    const renderScene = new RenderPass(scene, camera);
+    const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(container.clientWidth, container.clientHeight),
+        0.55, // Optimized strength (0.4–0.7)
+        0.3,  // radius
+        0.88  // Optimized threshold (0.8+)
+    );
+
+    // Adjust bloom colors to be electric/neon teal
+    bloomPass.tintColor = new THREE.Color(0x00eaff); // Soft Cyan theme
+
+    const renderTarget = new THREE.WebGLRenderTarget(container.clientWidth, container.clientHeight, {
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        format: THREE.RGBAFormat,
+        type: THREE.HalfFloatType,
+    });
+    const composer = new EffectComposer(renderer, renderTarget);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+
+    // SHADERS
+    const vertexShader = `
+        uniform float uTime;
+        varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vPosition;
+
+        // Simplex 3D Noise 
+        // by Ian McEwan, Ashima Arts
+        vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
+        vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
+
+        float snoise(vec3 v){ 
+            const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+            const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+
+            // First corner
+            vec3 i  = floor(v + dot(v, C.yyy) );
+            vec3 x0 = v - i + dot(i, C.xxx) ;
+
+            // Other corners
+            vec3 g = step(x0.yzx, x0.xyz);
+            vec3 l = 1.0 - g;
+            vec3 i1 = min( g.xyz, l.zxy );
+            vec3 i2 = max( g.xyz, l.zxy );
+
+            //  x0 = x0 - 0.0 + 0.0 * C 
+            vec3 x1 = x0 - i1 + 1.0 * C.xxx;
+            vec3 x2 = x0 - i2 + 2.0 * C.xxx;
+            vec3 x3 = x0 - 1.0 + 3.0 * C.xxx;
+
+            // Permutations
+            i = mod(i, 289.0 ); 
+            vec4 p = permute( permute( permute( 
+                        i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
+                    + i.y + vec4(0.0, i1.y, i2.y, 1.0 )) 
+                    + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+
+            // Gradients
+            // ( N*N points uniformly over a square, mapped onto an octahedron.)
+            float n_ = 1.0/7.0; // N=7
+            vec3  ns = n_ * D.wyz - D.xzx;
+
+            vec4 j = p - 49.0 * floor(p * ns.z *ns.z);  //  mod(p,N*N)
+
+            vec4 x_ = floor(j * ns.z);
+            vec4 y_ = floor(j - 7.0 * x_ );    // mod(j,N)
+
+            vec4 x = x_ *ns.x + ns.yyyy;
+            vec4 y = y_ *ns.x + ns.yyyy;
+            vec4 h = 1.0 - abs(x) - abs(y);
+
+            vec4 b0 = vec4( x.xy, y.xy );
+            vec4 b1 = vec4( x.zw, y.zw );
+
+            vec4 s0 = floor(b0)*2.0 + 1.0;
+            vec4 s1 = floor(b1)*2.0 + 1.0;
+            vec4 sh = -step(h, vec4(0.0));
+
+            vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
+            vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
+
+            vec3 p0 = vec3(a0.xy,h.x);
+            vec3 p1 = vec3(a0.zw,h.y);
+            vec3 p2 = vec3(a1.xy,h.z);
+            vec3 p3 = vec3(a1.zw,h.w);
+
+            //Normalise gradients
+            vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+            p0 *= norm.x;
+            p1 *= norm.y;
+            p2 *= norm.z;
+            p3 *= norm.w;
+
+            // Mix final noise value
+            vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+            m = m * m;
+            return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), 
+                                        dot(p2,x2), dot(p3,x3) ) );
+        }
+
+        void main() {
+            vUv = uv;
+            vNormal = normal;
+            
+            // Calculate organic distortion (Increased for "alive" feel)
+            float distortion = snoise(position * 1.2 + uTime * 0.6) * 0.22;
+            vec3 newPosition = position + normal * distortion;
+            vPosition = newPosition;
+
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(newPosition, 1.0);
+        }
+    `;
+
+    const fragmentShader = `
+        uniform float uTime;
+        uniform vec3 uColor;
+        varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vPosition;
+
+        void main() {
+            // Edge highlighting (Fresnel-like)
+            vec3 viewDirection = normalize(cameraPosition - vPosition);
+            float fresnelTerm = dot(viewDirection, vNormal);
+            fresnelTerm = clamp(1.0 - fresnelTerm, 0.0, 1.0);
+            fresnelTerm = pow(fresnelTerm, 3.0);
+
+            // Base color enhanced by fresnel, avoiding pure white
+            vec3 finalColor = uColor * (0.6 + fresnelTerm * 1.2);
+            
+            // Additive wireframe like glow
+            float alpha = max(fresnelTerm * 0.6, 0.1);
+
+            gl_FragColor = vec4(finalColor, alpha);
+        }
+    `;
+
+    // 1. Core Sphere (Icosahedron - Lowered detail for "airy" look)
+    const geometry = new THREE.IcosahedronGeometry(2.5, 3);
+    const material = new THREE.ShaderMaterial({
+        vertexShader,
+        fragmentShader,
+        uniforms: {
+            uTime: { value: 0 },
+            uColor: { value: new THREE.Color(0x00eaff) } // Electric Cyan
+        },
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        wireframe: true, // Holographic lines
+        depthWrite: false
     });
 
-    const orbitDuration = 4200;
-    const absorbDuration = 900;
-    const releaseDuration = 1100;
+    const sphere = new THREE.Mesh(geometry, material);
+    scene.add(sphere);
 
-    let orbitDurationCurrent = orbitDuration;
-    let phase = "orbit";
-    let phaseStartedAt = performance.now();
-    let lastTime = phaseStartedAt;
+    // Inner Core for depth
+    const coreGeometry = new THREE.IcosahedronGeometry(2.35, 16);
+    const coreMaterial = new THREE.MeshBasicMaterial({
+        color: 0x001122, // Deep blue core
+        transparent: true,
+        opacity: 0.08, // Ghostly faint core
+        wireframe: false,
+        depthWrite: false,
+        blending: THREE.NormalBlending
+    });
+    const innerCore = new THREE.Mesh(coreGeometry, coreMaterial);
+    scene.add(innerCore);
 
-    const applyVisualState = (item, x, y) => {
-        item.node.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0)`;
-        item.node.style.opacity = item.opacity.toFixed(3);
-        item.node.style.setProperty("--tag-scale", item.scale.toFixed(3));
-        item.node.style.setProperty("--tag-opacity", item.opacity.toFixed(3));
-    };
+    // 1.2 Thin Outer Layer (Shimmer Shell - Lowered detail)
+    const shellGeometry = new THREE.IcosahedronGeometry(2.65, 2);
+    const shellMaterial = new THREE.ShaderMaterial({
+        vertexShader,
+        fragmentShader,
+        uniforms: {
+            uTime: { value: 0 },
+            uColor: { value: new THREE.Color(0x00eaff) }
+        },
+        transparent: true,
+        opacity: 0.15,
+        blending: THREE.AdditiveBlending,
+        wireframe: true,
+        depthWrite: false
+    });
+    const shellSphere = new THREE.Mesh(shellGeometry, shellMaterial);
+    scene.add(shellSphere);    // 2. Layered Particle System
+    const colors = [0x00eaff, 0x00d4ff, 0x00f0ff]; // Chroma Diversity Palette
 
-    const updateMetrics = () => {
-        const bounds = system.getBoundingClientRect();
-        const scale = clamp(Math.min(bounds.width, bounds.height) / 220, 0.82, 1.12);
+    function createParticleLayer(count, baseRadius, opacity, customColor = null) {
+        const posArray = new Float32Array(count * 3);
+        const particleScales = new Float32Array(count);
 
-        items.forEach((item) => {
-            item.scaledBaseRadius = item.baseRadius * scale;
-        });
-    };
+        for (let i = 0; i < count; i++) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(Math.random() * 2 - 1);
+            const r = baseRadius + (Math.random() - 0.5) * 0.4;
 
-    const setPhase = (nextPhase, now) => {
-        phase = nextPhase;
-        phaseStartedAt = now;
+            posArray[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+            posArray[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            posArray[i * 3 + 2] = r * Math.cos(phi);
 
-        system.classList.toggle("is-closing", nextPhase === "absorb");
-        system.classList.toggle("is-opening", nextPhase === "release");
-
-        if (nextPhase === "release") {
-            items.forEach((item) => {
-                item.angle += randomInRange(0.35, 0.95);
-                item.verticalRatio = clamp(item.verticalRatio + randomInRange(-0.06, 0.06), 0.6, 0.82);
-                item.radiusOffset = randomInRange(-9, 9);
-                item.bobSeed = randomInRange(0, Math.PI * 2);
-            });
+            particleScales[i] = 0.5 + Math.random() * 0.5;
         }
 
-        if (nextPhase === "orbit") {
-            orbitDurationCurrent = orbitDuration + randomInRange(-600, 800);
-        }
-    };
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        geo.setAttribute('aScale', new THREE.BufferAttribute(particleScales, 1));
 
-    const renderStaticState = () => {
-        updateMetrics();
+        const mat = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uColor: { value: new THREE.Color(customColor || colors[Math.floor(Math.random() * colors.length)]) },
+                uOpacity: { value: opacity }
+            },
+            vertexShader: `
+                uniform float uTime;
+                attribute float aScale;
+                void main() {
+                    vec3 pos = position;
+                    pos.y += sin(uTime + pos.x) * 0.05;
+                    pos.x += cos(uTime + pos.y) * 0.05;
 
-        items.forEach((item) => {
-            const x = Math.cos(item.angle) * item.scaledBaseRadius;
-            const y = Math.sin(item.angle) * item.scaledBaseRadius * item.verticalRatio;
-            item.scale = 1;
-            item.opacity = 1;
-            applyVisualState(item, x, y);
+                    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                    gl_PointSize = (0.5 + aScale * 0.5) * ( 10.0 / -mvPosition.z ); 
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 uColor;
+                uniform float uOpacity;
+                void main() {
+                    vec2 coord = gl_PointCoord - vec2(0.5);
+                    float dist = length(coord);
+                    if (dist > 0.5) discard;
+                    
+                    float alpha = 1.0 - (dist * 2.0);
+                    alpha = pow(alpha, 2.0); 
+                    
+                    gl_FragColor = vec4(uColor, alpha * uOpacity);
+                }
+            `,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
         });
-    };
 
-    updateMetrics();
-
-    if (prefersReducedMotion) {
-        renderStaticState();
-        return;
+        return new THREE.Points(geo, mat);
     }
 
-    const render = (now) => {
-        const dt = Math.min((now - lastTime) / 1000, 0.04);
-        const time = now * 0.001;
-        const phaseElapsed = now - phaseStartedAt;
-        lastTime = now;
+    const outerParticles = createParticleLayer(1200, 3.15, 0.45);
+    const innerParticles = createParticleLayer(600, 2.8, 0.12);
+    const backLightParticles = createParticleLayer(800, 1.3, 0.15); 
+    const outerShimmer = createParticleLayer(1000, 3.5, 0.2, 0x00f0ff); // Cinematic Outer Layer
+    
+    scene.add(outerParticles);
+    scene.add(innerParticles);
+    scene.add(backLightParticles);
+    scene.add(outerShimmer);
 
-        if (phase === "orbit" && phaseElapsed >= orbitDurationCurrent) {
-            setPhase("absorb", now);
-        } else if (phase === "absorb" && phaseElapsed >= absorbDuration) {
-            setPhase("release", now);
-        } else if (phase === "release" && phaseElapsed >= releaseDuration) {
-            setPhase("orbit", now);
-        }
+    // 3. Dynamic Orbital Rings (Randomized)
+    const ringsGroup = new THREE.Group();
+    const ringMaterial = new THREE.MeshBasicMaterial({
+        color: 0x5290ff, // Power Blue
+        transparent: true,
+        opacity: 0.35,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
 
-        items.forEach((item, index) => {
-            const bob = Math.sin(time * item.bobSpeed + item.bobSeed) * 4;
-            const speedMultiplier = phase === "absorb"
-                ? 2.15
-                : phase === "release"
-                    ? 1.05
-                    : 0.78;
+    for(let i = 0; i < 6; i++) {
+        const radius = 3.2 + Math.random() * 1.0;
+        const tube = 0.016 + Math.random() * 0.024; // Doubled thickness
+        const ringGeo = new THREE.TorusGeometry(radius, tube, 16, 100);
+        const ring = new THREE.Mesh(ringGeo, ringMaterial);
+        
+        // Randomize initial orientation
+        ring.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+        
+        // Store unique rotation speeds
+        ring.userData = {
+            speedX: (Math.random() - 0.5) * 0.4,
+            speedY: (Math.random() - 0.5) * 0.4,
+            speedZ: (Math.random() - 0.5) * 0.4
+        };
+        
+        ringsGroup.add(ring);
+    }
+    scene.add(ringsGroup);
 
-            item.angle += dt * item.speed * speedMultiplier;
+    // 3.1 Ultra-Thin Technical Rings (New Addition)
+    const thinRingsGroup = new THREE.Group();
+    const thinRingMat = new THREE.MeshBasicMaterial({
+        color: 0x00eaff,
+        transparent: true,
+        opacity: 0.25,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
 
-            if (phase === "orbit") {
-                item.targetRadius = item.scaledBaseRadius + item.radiusOffset * 0.35 + bob;
-                item.targetScale = 1;
-                item.targetOpacity = 1;
-            } else if (phase === "absorb") {
-                const collapseProgress = Math.min(phaseElapsed / absorbDuration, 1);
-                item.targetRadius = 8 + Math.cos(time * 5 + index) * 1.5;
-                item.targetScale = 1 - collapseProgress * 0.78;
-                item.targetOpacity = 1 - collapseProgress;
-            } else {
-                const releaseProgress = Math.min(phaseElapsed / releaseDuration, 1);
-                item.targetRadius = item.scaledBaseRadius + item.radiusOffset * 0.65 + bob;
-                item.targetScale = 0.22 + releaseProgress * 0.78;
-                item.targetOpacity = Math.min(1, releaseProgress * 1.4);
-            }
+    for(let i = 0; i < 10; i++) {
+        const radius = 3.3 + Math.random() * 1.2;
+        const tube = 0.006 + Math.random() * 0.004; // Doubled thickness
+        const ringGeo = new THREE.TorusGeometry(radius, tube, 8, 100);
+        const ring = new THREE.Mesh(ringGeo, thinRingMat);
+        ring.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+        ring.userData = {
+            speedX: (Math.random() - 0.5) * 0.3,
+            speedY: (Math.random() - 0.5) * 0.3,
+            speedZ: (Math.random() - 0.5) * 0.3
+        };
+        thinRingsGroup.add(ring);
+    }
+    scene.getObjectsByProperty('name', 'JarvisSphere')[0]?.add(thinRingsGroup) || scene.add(thinRingsGroup);
 
-            item.radius += (item.targetRadius - item.radius) * (phase === "absorb" ? 0.18 : 0.11);
-            item.scale += (item.targetScale - item.scale) * (phase === "absorb" ? 0.18 : 0.14);
-            item.opacity += (item.targetOpacity - item.opacity) * 0.16;
+    // 4. Random Arc Segments
+    const arcGroup = new THREE.Group();
+    const arcMaterial = new THREE.MeshBasicMaterial({
+        color: 0x00eaff, // Electric Cyan
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.5,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
 
-            const x = Math.cos(item.angle) * item.radius;
-            const y = Math.sin(item.angle) * item.radius * item.verticalRatio + bob * 0.35;
-            applyVisualState(item, x, y);
+    for(let i = 0; i < 4; i++) {
+        const arcGeo = new THREE.RingGeometry(3.3 + Math.random() * 0.2, 3.32 + Math.random() * 0.2, 64, 1, 0, Math.PI * (0.1 + Math.random() * 0.4));
+        const arc = new THREE.Mesh(arcGeo, arcMaterial);
+        arc.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+        arcGroup.add(arc);
+    }
+    scene.add(arcGroup);
+
+    // 5. Organic Connection Lines & Glowing Nodes (Maximized density)
+    const linePoints = [];
+    for (let i = 0; i < 240; i++) {
+        // Random Line Breaks: 35% chance to skip a segment
+        if (Math.random() > 0.65) continue;
+
+        linePoints.push(new THREE.Vector3(
+            (Math.random() - 0.5) * 4.8, // Slightly tighter bounds
+            (Math.random() - 0.5) * 4.8,
+            (Math.random() - 0.5) * 4.8
+        ));
+    }
+    const lineGeometry = new THREE.BufferGeometry().setFromPoints(linePoints);
+    
+    // Line Opacity Variation
+    const lineMaterial = new THREE.LineBasicMaterial({ 
+        color: 0x5290ff,
+        transparent: true,
+        opacity: 0.15 + Math.random() * 0.2, // Random starting brightness
+        blending: THREE.AdditiveBlending 
+    });
+    const line = new THREE.Line(lineGeometry, lineMaterial);
+    scene.add(line);
+
+
+    const nodeMaterial = new THREE.PointsMaterial({
+        color: 0x00eaff,
+        size: 0.08,
+        transparent: true,
+        opacity: 0.8,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+    const nodes = new THREE.Points(lineGeometry, nodeMaterial);
+    scene.add(nodes);
+
+    // Mouse Interaction
+    let mouseX = 0;
+    let mouseY = 0;
+    let targetX = 0;
+    let targetY = 0;
+
+    // Add event listener to hero component
+    const heroSection = document.getElementById('home');
+    heroSection?.addEventListener('mousemove', (e) => {
+        const x = (e.clientX / window.innerWidth) * 2 - 1;
+        const y = -(e.clientY / window.innerHeight) * 2 + 1;
+        targetX = x * 0.5;
+        targetY = y * 0.5;
+    });
+    heroSection?.addEventListener('mouseleave', () => {
+        targetX = 0;
+        targetY = 0;
+    });
+
+
+    const clock = new THREE.Clock();
+    let isVisible = true;
+
+    // Intersection observer to pause in background
+    const observer = new IntersectionObserver((entries) => {
+        isVisible = entries[0].isIntersecting;
+    }, { threshold: 0.05 });
+    observer.observe(container);
+
+    // Animation Loop
+    const tick = () => {
+        requestAnimationFrame(tick);
+
+        if (!isVisible) return;
+
+        const elapsedTime = clock.getElapsedTime();
+
+        // Ease mouse interaction
+        mouseX += (targetX - mouseX) * 0.05;
+        mouseY += (targetY - mouseY) * 0.05;
+
+        // Update Materials
+        material.uniforms.uTime.value = elapsedTime;
+        shellMaterial.uniforms.uTime.value = elapsedTime;
+        outerParticles.material.uniforms.uTime.value = elapsedTime;
+        innerParticles.material.uniforms.uTime.value = elapsedTime;
+        backLightParticles.material.uniforms.uTime.value = elapsedTime;
+        outerShimmer.material.uniforms.uTime.value = elapsedTime;
+
+        // ENERGY FLOW (Subtle Flicker)
+        const flicker = 0.5 + Math.sin(elapsedTime * 4.0) * 0.15;
+        lineMaterial.opacity = (0.2 + Math.random() * 0.1) * flicker;
+        nodeMaterial.opacity = 0.6 * flicker;
+
+        // Organic Axis Rotation (Slower "depth" motion for cinema)
+        sphere.rotation.y = elapsedTime * 0.06;
+        sphere.rotation.x = elapsedTime * 0.04;
+        sphere.rotation.z = Math.sin(elapsedTime * 0.08) * 0.025;
+
+        innerCore.rotation.y = elapsedTime * 0.03;
+        innerCore.rotation.x = elapsedTime * 0.025;
+        innerCore.rotation.z = Math.sin(elapsedTime * 0.1) * 0.05;
+
+        // Breathing Scale Effect (0.02–0.04 range)
+        const breathingScale = 1.0 + Math.sin(elapsedTime * 0.8) * 0.025;
+        sphere.scale.setScalar(breathingScale);
+        shellSphere.scale.setScalar(breathingScale * 1.01);
+        innerCore.scale.setScalar(breathingScale * 0.98);
+        outerParticles.scale.setScalar(breathingScale * 1.02);
+        innerParticles.scale.setScalar(breathingScale * 0.96);
+        backLightParticles.scale.setScalar(breathingScale * 0.92);
+        outerShimmer.scale.setScalar(breathingScale * 1.06);
+
+        // Subtly rotate the shell differently
+        shellSphere.rotation.y = elapsedTime * -0.04;
+        shellSphere.rotation.x = elapsedTime * -0.025;
+
+        // Rotate particle system layers slowly
+        outerParticles.rotation.y = elapsedTime * -0.03;
+        outerParticles.rotation.x = elapsedTime * 0.04;
+        
+        innerParticles.rotation.y = elapsedTime * 0.03;
+        innerParticles.rotation.z = elapsedTime * 0.05;
+
+        backLightParticles.rotation.y = elapsedTime * 0.05;
+        backLightParticles.rotation.x = elapsedTime * -0.06;
+
+        outerShimmer.rotation.y = elapsedTime * 0.02;
+        outerShimmer.rotation.z = elapsedTime * -0.03;
+
+
+        // Orbital Rings Animation
+        ringsGroup.children.forEach(ring => {
+            ring.rotation.x += ring.userData.speedX * 0.05;
+            ring.rotation.y += ring.userData.speedY * 0.05;
+            ring.rotation.z += ring.userData.speedZ * 0.05;
         });
 
-        window.requestAnimationFrame(render);
+        thinRingsGroup.children.forEach(ring => {
+            ring.rotation.x += ring.userData.speedX * 0.04;
+            ring.rotation.y += ring.userData.speedY * 0.04;
+            ring.rotation.z += ring.userData.speedZ * 0.04;
+        });
+
+        // Random Arc Animation
+        arcGroup.rotation.y = elapsedTime * 0.15;
+        arcGroup.rotation.z = Math.sin(elapsedTime * 0.2) * 0.1;
+
+        // Line subtle movement
+        line.rotation.y = elapsedTime * 0.05;
+
+        // Apply Parallax / Floating
+        scene.position.x = mouseX * 0.8;
+        scene.position.y = mouseY * 0.8 + Math.sin(elapsedTime * 0.6) * 0.15;
+
+        renderer.render(scene, camera);
+        // composer.render();
     };
 
-    window.addEventListener("resize", updateMetrics);
-    window.requestAnimationFrame(render);
+    tick();
+
+    const onWindowResize = () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    };
+
+    window.addEventListener('resize', onWindowResize);
 }
 
 function initScrollParallax() {
@@ -1050,7 +1431,7 @@ function init() {
     runFeature(initSkillMeters);
     runFeature(initHeroRoleRotator);
     runFeature(initHeroParallax);
-    runFeature(initHandSystem);
+    runFeature(initJarvisSphere);
     runFeature(initScrollParallax);
     runFeature(initTiltCards);
     runFeature(initProjectLinks);

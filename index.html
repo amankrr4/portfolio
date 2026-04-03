@@ -10,6 +10,15 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
 </head>
 <body>
     <canvas class="bg-canvas" id="bg-canvas" aria-hidden="true"></canvas>
@@ -95,18 +104,7 @@
                 </div>
 
                 <div class="hero-visual" id="hero-visual" data-reveal="left" data-parallax="0.08">
-                    <div class="orbital-chip chip-top">
-                        <i class="fab fa-python"></i>
-                        <span>Python</span>
-                    </div>
-                    <div class="orbital-chip chip-right">
-                        <i class="fab fa-js"></i>
-                        <span>JavaScript</span>
-                    </div>
-                    <div class="orbital-chip chip-bottom">
-                        <i class="fas fa-brain"></i>
-                        <span>AI Systems</span>
-                    </div>
+
 
 
                 </div>
