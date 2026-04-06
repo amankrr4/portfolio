@@ -1,7 +1,4 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 const firebaseConfig = {
     apiKey: "AIzaSyBeqBg3LaVkuKztXmfRNAWT_g6BSqL2TcU",
@@ -14,11 +11,17 @@ const firebaseConfig = {
 };
 
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+const isSmallViewport = window.matchMedia("(max-width: 860px)").matches;
+const hardwareConcurrency = navigator.hardwareConcurrency || 4;
+const deviceMemory = navigator.deviceMemory || 4;
+const performanceLite = coarsePointer || isSmallViewport || hardwareConcurrency <= 4 || deviceMemory <= 4;
 
 const state = {
     activeNotification: null,
     cleanupNotification: null,
-    firebaseClient: null
+    firebaseClient: null,
+    performanceLite
 };
 
 async function getFirebaseClient() {
@@ -125,18 +128,16 @@ function initScrollUI() {
     const navLinks = Array.from(document.querySelectorAll(".nav-link"));
     const navMenu = document.getElementById("nav-menu");
     const headerOffset = 104;
+    const sectionsById = new Map(sections.map((section) => [`#${section.id}`, section]));
     let lastActiveId = "";
+    let navItems = [];
+    let frameId = null;
 
-    const syncIndicator = (scrollTop) => {
-        if (!navMenu || !navLinks.length) {
-            navMenu?.style.setProperty("--nav-indicator-opacity", "0");
-            return;
-        }
-
-        const navItems = navLinks
+    const rebuildNavItems = () => {
+        navItems = navLinks
             .map((link) => {
                 const href = link.getAttribute("href");
-                const section = href ? document.querySelector(href) : null;
+                const section = href ? sectionsById.get(href) : null;
 
                 if (!section) {
                     return null;
@@ -149,6 +150,13 @@ function initScrollUI() {
                 };
             })
             .filter(Boolean);
+    };
+
+    const syncIndicator = (scrollTop) => {
+        if (!navMenu || !navLinks.length) {
+            navMenu?.style.setProperty("--nav-indicator-opacity", "0");
+            return;
+        }
 
         if (!navItems.length) {
             navMenu.style.setProperty("--nav-indicator-opacity", "0");
@@ -208,10 +216,10 @@ function initScrollUI() {
 
     const update = () => {
         const scrollTop = window.scrollY;
-        const docHeight = document.documentElement.scrollHeight - window.innerHeight;
-        const progressRatio = docHeight > 0 ? scrollTop / docHeight : 0;
 
-        document.documentElement.style.setProperty("--scroll-shift", `${scrollTop}px`);
+        if (!state.performanceLite) {
+            document.documentElement.style.setProperty("--scroll-shift", `${scrollTop}px`);
+        }
 
         if (navbar) {
             navbar.classList.toggle("is-scrolled", scrollTop > 24);
@@ -240,15 +248,35 @@ function initScrollUI() {
         syncIndicator(scrollTop);
     };
 
+    const queueUpdate = () => {
+        if (frameId) {
+            return;
+        }
+
+        frameId = requestAnimationFrame(() => {
+            frameId = null;
+            update();
+        });
+    };
+
+    rebuildNavItems();
     update();
-    window.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
+    window.addEventListener("scroll", queueUpdate, { passive: true });
+    window.addEventListener("resize", () => {
+        rebuildNavItems();
+        queueUpdate();
+    });
 }
 
 function initRevealAnimations() {
     const revealTargets = Array.from(document.querySelectorAll("[data-reveal]"));
 
     if (!revealTargets.length) {
+        return;
+    }
+
+    if (state.performanceLite) {
+        forceRevealAll(revealTargets);
         return;
     }
 
@@ -474,7 +502,7 @@ function initBackgroundCanvas() {
         width: 0,
         height: 0,
         dpr: 1,
-        ribbons: Array.from({ length: 8 }, (_, index) => ({
+        ribbons: Array.from({ length: state.performanceLite ? 5 : 7 }, (_, index) => ({
             baseY: 0.16 + index * 0.1,
             amplitude: 18 + index * 5,
             speed: 0.00022 + index * 0.00003,
@@ -482,23 +510,25 @@ function initBackgroundCanvas() {
             thickness: 1.2 + (index % 3) * 0.45,
             alpha: 0.09 + index * 0.008
         })),
-        rings: Array.from({ length: 5 }, (_, index) => ({
+        rings: Array.from({ length: state.performanceLite ? 3 : 4 }, (_, index) => ({
             radius: 120 + index * 68,
             speed: 0.0001 + index * 0.00004,
             arcSpan: 0.8 + index * 0.16,
             width: 1 + index * 0.22,
             alpha: 0.08 + index * 0.015
         })),
-        pulses: Array.from({ length: 18 }, (_, index) => ({
-            lane: index % 8,
+        pulses: Array.from({ length: state.performanceLite ? 8 : 12 }, (_, index) => ({
+            lane: index % (state.performanceLite ? 5 : 7),
             progress: (index * 0.17) % 1,
             speed: 0.00009 + (index % 5) * 0.000025,
             size: 1.8 + (index % 3) * 0.8
         }))
     };
+    let frameId = null;
+    let isVisible = !document.hidden;
 
     const resize = () => {
-        stateField.dpr = Math.min(window.devicePixelRatio || 1, 2);
+        stateField.dpr = Math.min(window.devicePixelRatio || 1, state.performanceLite ? 1 : 1.5);
         stateField.width = window.innerWidth;
         stateField.height = window.innerHeight;
         canvas.width = Math.round(stateField.width * stateField.dpr);
@@ -601,6 +631,12 @@ function initBackgroundCanvas() {
     };
 
     const render = (time) => {
+        frameId = window.requestAnimationFrame(render);
+
+        if (!isVisible) {
+            return;
+        }
+
         context.clearRect(0, 0, stateField.width, stateField.height);
         context.globalCompositeOperation = "source-over";
 
@@ -626,26 +662,33 @@ function initBackgroundCanvas() {
             pulse.progress = (pulse.progress + pulse.speed * 16) % 1;
             drawPulse(pulse, time);
         });
+    };
 
-        window.requestAnimationFrame(render);
+    const handleVisibilityChange = () => {
+        isVisible = !document.hidden;
+
+        if (isVisible && !frameId && !prefersReducedMotion) {
+            frameId = window.requestAnimationFrame(render);
+        }
     };
 
     resize();
     window.addEventListener("resize", resize);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     if (prefersReducedMotion) {
         renderStatic();
         return;
     }
 
-    window.requestAnimationFrame(render);
+    frameId = window.requestAnimationFrame(render);
 }
 
 function initHeroParallax() {
     const heroVisual = document.getElementById("hero-visual");
     const layers = heroVisual?.querySelectorAll(".layer");
 
-    if (!heroVisual || !layers?.length || prefersReducedMotion) {
+    if (!heroVisual || !layers?.length || prefersReducedMotion || state.performanceLite) {
         return;
     }
 
@@ -698,6 +741,8 @@ function initJarvisSphere() {
         return;
     }
 
+    container.classList.add("has-webgl");
+
     // Three.js Setup
     const scene = new THREE.Scene();
 
@@ -708,39 +753,16 @@ function initJarvisSphere() {
     // Renderer
     const renderer = new THREE.WebGLRenderer({ 
         alpha: true, 
-        antialias: true, 
+        antialias: false, 
         powerPreference: "high-performance",
         premultipliedAlpha: false // Fixes transparency issues in many compositions
     });
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
     renderer.setClearColor(0x000000, 0); // Transparent base
     renderer.setClearAlpha(0);
-    renderer.autoClear = false; // Manual clear for composer alpha
     renderer.domElement.style.background = 'none';
     container.insertBefore(renderer.domElement, container.firstChild);
-
-    // Post-processing Bloom
-    const renderScene = new RenderPass(scene, camera);
-    const bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(container.clientWidth, container.clientHeight),
-        0.55, // Optimized strength (0.4–0.7)
-        0.3,  // radius
-        0.88  // Optimized threshold (0.8+)
-    );
-
-    // Adjust bloom colors to be electric/neon teal
-    bloomPass.tintColor = new THREE.Color(0x00eaff); // Soft Cyan theme
-
-    const renderTarget = new THREE.WebGLRenderTarget(container.clientWidth, container.clientHeight, {
-        minFilter: THREE.LinearFilter,
-        magFilter: THREE.LinearFilter,
-        format: THREE.RGBAFormat,
-        type: THREE.HalfFloatType,
-    });
-    const composer = new EffectComposer(renderer, renderTarget);
-    composer.addPass(renderScene);
-    composer.addPass(bloomPass);
 
     // SHADERS
     const vertexShader = `
@@ -839,6 +861,7 @@ function initJarvisSphere() {
     const fragmentShader = `
         uniform float uTime;
         uniform vec3 uColor;
+        uniform float uAlpha;
         varying vec2 vUv;
         varying vec3 vNormal;
         varying vec3 vPosition;
@@ -854,20 +877,21 @@ function initJarvisSphere() {
             vec3 finalColor = uColor * (0.6 + fresnelTerm * 1.2);
             
             // Additive wireframe like glow
-            float alpha = max(fresnelTerm * 0.6, 0.1);
+            float alpha = max(fresnelTerm * 0.6, 0.1) * uAlpha;
 
             gl_FragColor = vec4(finalColor, alpha);
         }
     `;
 
     // 1. Core Sphere (Icosahedron - Lowered detail for "airy" look)
-    const geometry = new THREE.IcosahedronGeometry(2.5, 3);
+    const geometry = new THREE.IcosahedronGeometry(2.5, 2);
     const material = new THREE.ShaderMaterial({
         vertexShader,
         fragmentShader,
         uniforms: {
             uTime: { value: 0 },
-            uColor: { value: new THREE.Color(0x00eaff) } // Electric Cyan
+            uColor: { value: new THREE.Color(0x00eaff) }, // Electric Cyan
+            uAlpha: { value: 0.87 }
         },
         transparent: true,
         blending: THREE.AdditiveBlending,
@@ -879,7 +903,7 @@ function initJarvisSphere() {
     scene.add(sphere);
 
     // Inner Core for depth
-    const coreGeometry = new THREE.IcosahedronGeometry(2.35, 16);
+    const coreGeometry = new THREE.IcosahedronGeometry(2.35, 5);
     const coreMaterial = new THREE.MeshBasicMaterial({
         color: 0x001122, // Deep blue core
         transparent: true,
@@ -898,7 +922,8 @@ function initJarvisSphere() {
         fragmentShader,
         uniforms: {
             uTime: { value: 0 },
-            uColor: { value: new THREE.Color(0x00eaff) }
+            uColor: { value: new THREE.Color(0x00eaff) },
+            uAlpha: { value: 0.51 }
         },
         transparent: true,
         opacity: 0.15,
@@ -971,10 +996,10 @@ function initJarvisSphere() {
         return new THREE.Points(geo, mat);
     }
 
-    const outerParticles = createParticleLayer(1200, 3.15, 0.45);
-    const innerParticles = createParticleLayer(600, 2.8, 0.12);
-    const backLightParticles = createParticleLayer(800, 1.3, 0.15); 
-    const outerShimmer = createParticleLayer(1000, 3.5, 0.2, 0x00f0ff); // Cinematic Outer Layer
+    const outerParticles = createParticleLayer(420, 3.15, 0.45);
+    const innerParticles = createParticleLayer(180, 2.8, 0.12);
+    const backLightParticles = createParticleLayer(260, 1.3, 0.15); 
+    const outerShimmer = createParticleLayer(320, 3.5, 0.2, 0x00f0ff); // Cinematic Outer Layer
     
     scene.add(outerParticles);
     scene.add(innerParticles);
@@ -991,10 +1016,10 @@ function initJarvisSphere() {
         depthWrite: false
     });
 
-    for(let i = 0; i < 6; i++) {
+    for(let i = 0; i < 7; i++) {
         const radius = 3.2 + Math.random() * 1.0;
-        const tube = 0.016 + Math.random() * 0.024; // Doubled thickness
-        const ringGeo = new THREE.TorusGeometry(radius, tube, 16, 100);
+        const tube = 0.016 + Math.random() * 0.024;
+        const ringGeo = new THREE.TorusGeometry(radius, tube, 12, 48);
         const ring = new THREE.Mesh(ringGeo, ringMaterial);
         
         // Randomize initial orientation
@@ -1021,10 +1046,10 @@ function initJarvisSphere() {
         depthWrite: false
     });
 
-    for(let i = 0; i < 10; i++) {
+    for(let i = 0; i < 12; i++) {
         const radius = 3.3 + Math.random() * 1.2;
-        const tube = 0.006 + Math.random() * 0.004; // Doubled thickness
-        const ringGeo = new THREE.TorusGeometry(radius, tube, 8, 100);
+        const tube = 0.006 + Math.random() * 0.004;
+        const ringGeo = new THREE.TorusGeometry(radius, tube, 8, 36);
         const ring = new THREE.Mesh(ringGeo, thinRingMat);
         ring.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
         ring.userData = {
@@ -1042,13 +1067,13 @@ function initJarvisSphere() {
         color: 0x00eaff, // Electric Cyan
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: 0.5,
+        opacity: 0.42,
         blending: THREE.AdditiveBlending,
         depthWrite: false
     });
 
     for(let i = 0; i < 4; i++) {
-        const arcGeo = new THREE.RingGeometry(3.3 + Math.random() * 0.2, 3.32 + Math.random() * 0.2, 64, 1, 0, Math.PI * (0.1 + Math.random() * 0.4));
+        const arcGeo = new THREE.RingGeometry(3.3 + Math.random() * 0.2, 3.32 + Math.random() * 0.2, 40, 1, 0, Math.PI * (0.1 + Math.random() * 0.4));
         const arc = new THREE.Mesh(arcGeo, arcMaterial);
         arc.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
         arcGroup.add(arc);
@@ -1057,7 +1082,7 @@ function initJarvisSphere() {
 
     // 5. Organic Connection Lines & Glowing Nodes (Maximized density)
     const linePoints = [];
-    for (let i = 0; i < 240; i++) {
+    for (let i = 0; i < 120; i++) {
         // Random Line Breaks: 35% chance to skip a segment
         if (Math.random() > 0.65) continue;
 
@@ -1073,7 +1098,7 @@ function initJarvisSphere() {
     const lineMaterial = new THREE.LineBasicMaterial({ 
         color: 0x5290ff,
         transparent: true,
-        opacity: 0.15 + Math.random() * 0.2, // Random starting brightness
+        opacity: 0.12 + Math.random() * 0.09,
         blending: THREE.AdditiveBlending 
     });
     const line = new THREE.Line(lineGeometry, lineMaterial);
@@ -1082,9 +1107,9 @@ function initJarvisSphere() {
 
     const nodeMaterial = new THREE.PointsMaterial({
         color: 0x00eaff,
-        size: 0.08,
+        size: 0.075,
         transparent: true,
-        opacity: 0.8,
+        opacity: 0.63,
         blending: THREE.AdditiveBlending,
         depthWrite: false
     });
@@ -1113,18 +1138,22 @@ function initJarvisSphere() {
 
     const clock = new THREE.Clock();
     let isVisible = true;
+    let isDocumentVisible = !document.hidden;
 
     // Intersection observer to pause in background
     const observer = new IntersectionObserver((entries) => {
         isVisible = entries[0].isIntersecting;
     }, { threshold: 0.05 });
     observer.observe(container);
+    document.addEventListener("visibilitychange", () => {
+        isDocumentVisible = !document.hidden;
+    });
 
     // Animation Loop
     const tick = () => {
         requestAnimationFrame(tick);
 
-        if (!isVisible) return;
+        if (!isVisible || !isDocumentVisible) return;
 
         const elapsedTime = clock.getElapsedTime();
 
@@ -1142,8 +1171,8 @@ function initJarvisSphere() {
 
         // ENERGY FLOW (Subtle Flicker)
         const flicker = 0.5 + Math.sin(elapsedTime * 4.0) * 0.15;
-        lineMaterial.opacity = (0.2 + Math.random() * 0.1) * flicker;
-        nodeMaterial.opacity = 0.6 * flicker;
+        lineMaterial.opacity = 0.15 + Math.sin(elapsedTime * 2.5) * 0.0375;
+        nodeMaterial.opacity = 0.54 * flicker;
 
         // Organic Axis Rotation (Slower "depth" motion for cinema)
         sphere.rotation.y = elapsedTime * 0.06;
@@ -1207,7 +1236,6 @@ function initJarvisSphere() {
         scene.position.y = mouseY * 0.8 + Math.sin(elapsedTime * 0.6) * 0.15;
 
         renderer.render(scene, camera);
-        // composer.render();
     };
 
     tick();
@@ -1216,6 +1244,7 @@ function initJarvisSphere() {
         camera.aspect = container.clientWidth / container.clientHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
     };
 
     window.addEventListener('resize', onWindowResize);
@@ -1224,7 +1253,7 @@ function initJarvisSphere() {
 function initScrollParallax() {
     const parallaxTargets = Array.from(document.querySelectorAll("[data-parallax]"));
 
-    if (!parallaxTargets.length || prefersReducedMotion) {
+    if (!parallaxTargets.length || prefersReducedMotion || state.performanceLite) {
         return;
     }
 
@@ -1266,7 +1295,7 @@ function initScrollParallax() {
 function initTiltCards() {
     const cards = document.querySelectorAll(".tilt-card");
 
-    if (!cards.length || prefersReducedMotion) {
+    if (!cards.length || prefersReducedMotion || state.performanceLite) {
         return;
     }
 
